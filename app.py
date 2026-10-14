@@ -13,8 +13,9 @@ st.set_page_config(
 
 def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, font_size, is_bold, alignment):
     """
-    Processes the template PDF: searches for 'Change Here Now', blanks it out,
-    and inserts the bulk title with precise alignment, bold styling, and metadata sync.
+    Processes the template PDF: uses PyMuPDF's native redaction replacement engine 
+    to swap 'Change Here Now' with the custom title, applying exact alignment, bold style, 
+    and keeping file size under 2.0 MB.
     """
     zip_buffer = io.BytesIO()
     
@@ -26,7 +27,7 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
     }
     selected_font = font_map.get(font_choice, "hebo" if is_bold else "helv")
 
-    # Map alignment to PyMuPDF text alignment flags (0 = Left, 1 = Center, 2 = Right)
+    # Map alignment to PyMuPDF redaction alignment flags (0 = Left, 1 = Center, 2 = Right)
     align_map = {"Left": 0, "Center": 1, "Right": 2}
     align_flag = align_map.get(alignment, 0)
 
@@ -51,34 +52,29 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
             # Open PDF from uploaded bytes via PyMuPDF (fitz)
             doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
             
-            # Search and replace "Change Here Now" across all pages
+            # Search and replace "Change Here Now" across all pages natively
             for page in doc:
                 text_instances = page.search_for("Change Here Now")
                 
-                # Fallback if casing differs
+                # Fallback casing variants if needed
                 if not text_instances:
                     text_instances = page.search_for("change here now")
                 if not text_instances:
                     text_instances = page.search_for("CHANGE HERE NOW")
 
                 for inst in text_instances:
-                    # 1. Redact/remove the old placeholder text cleanly
-                    page.add_redact_annot(inst)
-                    page.apply_redactions()
-                    
-                    # 2. Define a text box container width (350 points) starting from the placeholder coordinate
-                    # This gives enough horizontal room for Center and Right alignments to render correctly
-                    box_rect = fitz.Rect(inst.x0, inst.y0 - 3, inst.x0 + 350, inst.y0 + font_size + 20)
-                    
-                    # 3. Insert styled, aligned, auto-wrapping text box
-                    page.insert_textbox(
-                        box_rect,
-                        current_title,
-                        fontsize=font_size,
+                    # Native redaction replacement: erases placeholder and inserts styled text cleanly
+                    page.add_redact_annot(
+                        inst,
+                        text=current_title,
                         fontname=selected_font,
-                        color=(0, 0, 0),
-                        align=align_flag
+                        fontsize=font_size,
+                        align=align_flag,
+                        text_color=(0, 0, 0)
                     )
+                
+                # Apply all redactions for this page
+                page.apply_redactions()
             
             # Match Page Title / Metadata to the current title
             doc.set_metadata({
@@ -155,7 +151,7 @@ def main():
             if not valid_titles:
                 st.warning("Please provide at least one valid title.")
             else:
-                with st.spinner("Processing documents, applying bold typography and alignment, and compressing files..."):
+                with st.spinner("Processing documents with native redaction replacement, bold styling, and alignment..."):
                     pdf_bytes = uploaded_file.read()
                     zip_file_buffer = process_bulk_pdfs(
                         pdf_bytes, 
