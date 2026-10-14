@@ -85,11 +85,10 @@ def create_pdf(
     """
     Replace placeholder text with a bold title.
 
-    The selected font size is reduced only if the title
-    cannot fit in the available text box.
+    The title area spans nearly the full page width,
+    preventing wrapping caused by a narrow placeholder box.
 
-    White redaction is used, so the template should have
-    a white background behind the placeholder.
+    Font size is reduced only if the title cannot fit.
     """
 
     doc = fitz.open(
@@ -150,26 +149,22 @@ def create_pdf(
             page = doc[page_number]
             page_rect = page.rect
 
-            rect = fitz.Rect(original_rect)
+            # FIX: Use nearly the entire page width.
+            # This prevents the title from wrapping just
+            # because the original placeholder was narrow.
+            margin = 36  # Points; 36 pt = half an inch
 
-            # Expand the available width to the right.
-            rect.x1 = min(
-                page_rect.x1 - 18,
+            rect = fitz.Rect(
+                margin,
                 max(
-                    rect.x1,
-                    rect.x0 + 30,
+                    0,
+                    original_rect.y0 - title_size * 0.5,
                 ),
-            )
-
-            # Add vertical space around the title.
-            rect.y0 = max(
-                0,
-                rect.y0 - title_size * 0.5,
-            )
-
-            rect.y1 = min(
-                page_rect.y1,
-                rect.y1 + title_size * 0.8,
+                page_rect.width - margin,
+                min(
+                    page_rect.height,
+                    original_rect.y1 + title_size * 0.8,
+                ),
             )
 
             # Apply the selected font size.
@@ -360,7 +355,7 @@ alignment = st.selectbox(
     "Title alignment",
     ["Left", "Center", "Right"],
     index=1,
-    help="Choose the horizontal alignment inside the title area.",
+    help="Choose the horizontal alignment across the page.",
 )
 
 st.caption(
