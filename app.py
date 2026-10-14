@@ -85,10 +85,9 @@ def create_pdf(
     """
     Replace placeholder text with a bold title.
 
-    The title area spans nearly the full page width,
-    preventing wrapping caused by a narrow placeholder box.
-
-    Font size is reduced only if the title cannot fit.
+    The title area spans nearly the entire page width.
+    Font size is reduced only when needed to fit the title
+    on one line, while preserving the selected alignment.
     """
 
     doc = fitz.open(
@@ -132,7 +131,7 @@ def create_pdf(
                 graphics=0,
             )
 
-        # Select text alignment.
+        # Select horizontal text alignment.
         alignment_map = {
             "Left": fitz.TEXT_ALIGN_LEFT,
             "Center": fitz.TEXT_ALIGN_CENTER,
@@ -149,10 +148,8 @@ def create_pdf(
             page = doc[page_number]
             page_rect = page.rect
 
-            # FIX: Use nearly the entire page width.
-            # This prevents the title from wrapping just
-            # because the original placeholder was narrow.
-            margin = 36  # Points; 36 pt = half an inch
+            # Use almost the entire page width.
+            margin = 36  # 36 points = 0.5 inch
 
             rect = fitz.Rect(
                 margin,
@@ -167,7 +164,18 @@ def create_pdf(
                 ),
             )
 
-            # Apply the selected font size.
+            # Keep the title vertically near its original position.
+            # Use a taller area when large fonts are selected.
+            rect.y0 = max(
+                0,
+                original_rect.y0 - title_size * 0.6,
+            )
+            rect.y1 = min(
+                page_rect.height,
+                original_rect.y1 + title_size * 0.9,
+            )
+
+            # Start with the user's selected font size.
             font_size = float(title_size)
             inserted = False
 
@@ -184,6 +192,8 @@ def create_pdf(
                 else:
                     kwargs["fontname"] = "hebo"
 
+                # insert_textbox returns a negative value if
+                # the text does not fit inside the rectangle.
                 result = page.insert_textbox(
                     rect,
                     title,
@@ -194,13 +204,13 @@ def create_pdf(
                     inserted = True
                     break
 
+                # Reduce gradually until the title fits.
                 font_size -= 0.5
 
             if not inserted:
                 raise ValueError(
-                    f'Title "{title}" could not fit in the '
-                    "available text area. Use a shorter title "
-                    "or adjust the PDF template."
+                    f'Title "{title}" could not fit on one line. '
+                    "Try a shorter title or use a wider PDF page."
                 )
 
         # Update PDF metadata.
@@ -270,9 +280,7 @@ with left_col:
             "Ｓｔｒｅａｍｉｎｇ\n"
             "My Fourth Title"
         ),
-        help=(
-            "Each non-empty line creates one PDF."
-        ),
+        help="Each non-empty line creates one PDF.",
     )
 
 with right_col:
@@ -335,10 +343,11 @@ with size_col:
             st.selectbox(
                 "Select title size",
                 [
-                    12, 14, 16, 18, 20, 24,
-                    28, 32, 36, 42, 48, 60, 72,
+                    12, 16, 20, 24, 28, 32, 36,
+                    42, 48, 60, 72, 84, 96, 108,
+                    120, 144, 160, 180, 200,
                 ],
-                index=5,
+                index=7,
                 format_func=lambda size: f"{size} pt",
             )
         )
@@ -346,9 +355,9 @@ with size_col:
         title_size = st.number_input(
             "Custom title size (pt)",
             min_value=5.0,
-            max_value=120.0,
-            value=36.0,
-            step=1.0,
+            max_value=200.0,
+            value=60.0,
+            step=2.0,
         )
 
 alignment = st.selectbox(
