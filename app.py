@@ -44,8 +44,8 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
             else:
                 raw_name = current_title
                 
-            # Sanitize filename safely
-            safe_name = "".json(c for c in raw_name if c.isalnum() or c in (' ', '_', '-')).strip()
+            # Sanitize filename safely (Fixed .join typo here)
+            safe_name = "".join(c for c in raw_name if c.isalnum() or c in (' ', '_', '-')).strip()
             safe_name = safe_name.replace(" ", "_") + ".pdf"
             
             # Open fresh copy of the uploaded template PDF for each item
@@ -131,7 +131,7 @@ def main():
 
     st.markdown("---")
 
-    # --- Section 2: Typography & Formatting Controls ---
+    # --- Section 2: Typography & Formatting Settings ---
     st.subheader("2. Typography & Formatting Settings")
     t_col1, t_col2, t_col3, t_col4 = st.columns(4)
     
