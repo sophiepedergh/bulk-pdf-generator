@@ -46,19 +46,17 @@ def unique_filename(name, used):
     candidate = base
     counter = 2
 
-    while candidate.casefold() in used:
+    while (candidate + ".pdf").casefold() in used:
         candidate = f"{base}_{counter}"
         counter += 1
 
-    used.add(candidate.casefold())
-    return candidate + ".pdf"
+    filename = candidate + ".pdf"
+    used.add(filename.casefold())
+    return filename
 
 
 def find_bold_font():
-    """
-    Look for a bundled bold font.
-    Place a compatible font at fonts/NotoSans-Bold.ttf.
-    """
+    """Find an optional bundled bold font."""
     candidates = [
         FONT_DIR / "NotoSans-Bold.ttf",
         FONT_DIR / "DejaVuSans-Bold.ttf",
@@ -77,16 +75,23 @@ def find_placeholder(page):
     return page.search_for(PLACEHOLDER)
 
 
-def create_pdf(source_bytes, title, title_size, font_path=None):
+def create_pdf(
+    source_bytes,
+    title,
+    title_size,
+    alignment="Center",
+    font_path=None,
+):
     """
-    Create a PDF with the placeholder replaced by a bold title.
+    Replace placeholder text with a bold title.
 
-    The title size is specified in PDF points. If the title
-    cannot fit, the font size is reduced gradually.
+    The selected font size is reduced only if the title
+    cannot fit in the available text box.
 
-    Note: replacement uses white redaction, so the template
-    should have a plain white background behind the placeholder.
+    White redaction is used, so the template should have
+    a white background behind the placeholder.
     """
+
     doc = fitz.open(
         stream=source_bytes,
         filetype="pdf",
@@ -95,7 +100,7 @@ def create_pdf(source_bytes, title, title_size, font_path=None):
     try:
         if doc.needs_pass:
             raise ValueError(
-                "The uploaded PDF is password-protected. "
+                "The PDF is password-protected. "
                 "Please upload an unlocked PDF."
             )
 
@@ -110,11 +115,11 @@ def create_pdf(source_bytes, title, title_size, font_path=None):
         if not occurrences:
             raise ValueError(
                 f'The text "{PLACEHOLDER}" was not found. '
-                "Make sure the placeholder is searchable PDF text, "
+                "Make sure it is searchable PDF text, "
                 "not a scanned image or outlined text."
             )
 
-        # Remove all original occurrences before adding replacements.
+        # Remove all original occurrences.
         for page_number, rect in occurrences:
             doc[page_number].add_redact_annot(
                 rect,
@@ -128,14 +133,26 @@ def create_pdf(source_bytes, title, title_size, font_path=None):
                 graphics=0,
             )
 
-        # Insert each title using a bold font.
+        # Select text alignment.
+        alignment_map = {
+            "Left": fitz.TEXT_ALIGN_LEFT,
+            "Center": fitz.TEXT_ALIGN_CENTER,
+            "Right": fitz.TEXT_ALIGN_RIGHT,
+        }
+
+        text_alignment = alignment_map.get(
+            alignment,
+            fitz.TEXT_ALIGN_CENTER,
+        )
+
+        # Insert each replacement title.
         for page_number, original_rect in occurrences:
             page = doc[page_number]
             page_rect = page.rect
 
             rect = fitz.Rect(original_rect)
 
-            # Extend the text area to the right for longer titles.
+            # Expand the available width to the right.
             rect.x1 = min(
                 page_rect.x1 - 18,
                 max(
@@ -144,24 +161,25 @@ def create_pdf(source_bytes, title, title_size, font_path=None):
                 ),
             )
 
-            # Give the title some extra vertical room.
+            # Add vertical space around the title.
             rect.y0 = max(
                 0,
                 rect.y0 - title_size * 0.5,
             )
+
             rect.y1 = min(
                 page_rect.y1,
                 rect.y1 + title_size * 0.8,
             )
 
-            # Preserve the chosen size unless it cannot fit.
+            # Apply the selected font size.
             font_size = float(title_size)
             inserted = False
 
             while font_size >= 5:
                 kwargs = {
                     "fontsize": font_size,
-                    "align": fitz.TEXT_ALIGN_LEFT,
+                    "align": text_alignment,
                     "overlay": True,
                 }
 
@@ -169,7 +187,6 @@ def create_pdf(source_bytes, title, title_size, font_path=None):
                     kwargs["fontname"] = "CustomBold"
                     kwargs["fontfile"] = font_path
                 else:
-                    # Built-in Helvetica Bold.
                     kwargs["fontname"] = "hebo"
 
                 result = page.insert_textbox(
@@ -187,11 +204,11 @@ def create_pdf(source_bytes, title, title_size, font_path=None):
             if not inserted:
                 raise ValueError(
                     f'Title "{title}" could not fit in the '
-                    "available area, even after reducing the size. "
-                    "Use a shorter title or adjust your PDF template."
+                    "available text area. Use a shorter title "
+                    "or adjust the PDF template."
                 )
 
-        # Update the PDF document metadata.
+        # Update PDF metadata.
         metadata = doc.metadata
         metadata["title"] = title
         doc.set_metadata(metadata)
@@ -217,9 +234,11 @@ def create_pdf(source_bytes, title, title_size, font_path=None):
 # --------------------------------------------------
 
 st.title("📄 Bulk PDF Generator")
+
 st.write(
     "Upload a PDF template, replace its title in bulk, "
-    "rename the generated PDFs, and download them together."
+    "customize title size and alignment, rename the files, "
+    "and download your generated PDFs."
 )
 
 st.info(
@@ -227,7 +246,10 @@ st.info(
     '"Replaced Title Here".'
 )
 
-# 1. Upload PDF
+# --------------------------------------------------
+# 1. UPLOAD PDF
+# --------------------------------------------------
+
 st.subheader("1. Upload PDF Template")
 
 uploaded_pdf = st.file_uploader(
@@ -235,8 +257,11 @@ uploaded_pdf = st.file_uploader(
     type=["pdf"],
 )
 
-# 2. Bulk titles and rename strings
-st.subheader("2. Enter Bulk Titles and Rename Strings")
+# --------------------------------------------------
+# 2. BULK TITLES AND FILENAMES
+# --------------------------------------------------
+
+st.subheader("2. Bulk Titles and Rename Strings")
 
 left_col, right_col = st.columns(2)
 
@@ -251,8 +276,7 @@ with left_col:
             "My Fourth Title"
         ),
         help=(
-            "Each non-empty line creates one PDF. "
-            "Unicode title characters are retained."
+            "Each non-empty line creates one PDF."
         ),
     )
 
@@ -267,15 +291,18 @@ with right_col:
             "fourth-document"
         ),
         help=(
-            "Line 1 renames PDF 1, line 2 renames PDF 2, "
-            "and so on. The .pdf extension is added automatically."
+            "Each rename string corresponds to the title "
+            "on the same line."
         ),
     )
 
 titles = read_lines(titles_input)
 rename_strings = read_lines(names_input)
 
-# 3. Font settings
+# --------------------------------------------------
+# 3. TITLE FORMATTING
+# --------------------------------------------------
+
 st.subheader("3. Title Formatting")
 
 font_col, size_col = st.columns(2)
@@ -291,54 +318,60 @@ with font_col:
 
     if font_path:
         st.success(
-            f"Custom bold font found: {Path(font_path).name}"
+            f"Custom bold font found: "
+            f"{Path(font_path).name}"
         )
     else:
         st.warning(
-            "No custom font found. Using built-in Helvetica Bold. "
-            "For broader Unicode coverage, add a compatible bold "
+            "Using built-in Helvetica Bold. "
+            "For broader Unicode coverage, add a suitable "
             "font to fonts/NotoSans-Bold.ttf."
         )
 
 with size_col:
-    size_option = st.selectbox(
-        "Title font size",
-        [
-            "8 pt",
-            "10 pt",
-            "12 pt",
-            "14 pt",
-            "16 pt",
-            "18 pt",
-            "20 pt",
-            "24 pt",
-            "28 pt",
-            "36 pt",
-            "48 pt",
-            "Custom",
-        ],
-        index=3,
+    size_mode = st.radio(
+        "Title size mode",
+        ["Preset size", "Custom size"],
+        horizontal=True,
     )
 
-    if size_option == "Custom":
+    if size_mode == "Preset size":
+        title_size = float(
+            st.selectbox(
+                "Select title size",
+                [
+                    12, 14, 16, 18, 20, 24,
+                    28, 32, 36, 42, 48, 60, 72,
+                ],
+                index=5,
+                format_func=lambda size: f"{size} pt",
+            )
+        )
+    else:
         title_size = st.number_input(
             "Custom title size (pt)",
             min_value=5.0,
-            max_value=72.0,
-            value=14.0,
+            max_value=120.0,
+            value=36.0,
             step=1.0,
         )
-    else:
-        title_size = float(
-            size_option.replace(" pt", "")
-        )
 
-st.caption(
-    f"Selected size: {title_size:g} pt. "
-    "Long titles may use a smaller font if necessary to fit."
+alignment = st.selectbox(
+    "Title alignment",
+    ["Left", "Center", "Right"],
+    index=1,
+    help="Choose the horizontal alignment inside the title area.",
 )
 
-# 4. Input validation and summary
+st.caption(
+    f"Selected size: {title_size:g} pt | "
+    f"Alignment: {alignment} | Bold formatting"
+)
+
+# --------------------------------------------------
+# 4. BATCH SUMMARY
+# --------------------------------------------------
+
 st.subheader("4. Batch Summary")
 
 summary_col1, summary_col2, summary_col3 = st.columns(3)
@@ -354,9 +387,20 @@ summary_col2.metric(
 )
 
 summary_col3.metric(
-    "Selected font size",
+    "Title size",
     f"{title_size:g} pt",
 )
+
+if titles and len(titles) != len(rename_strings):
+    st.error(
+        "The number of titles and rename strings must match. "
+        "Please provide one rename string per title."
+    )
+
+if not titles:
+    st.caption(
+        "Enter at least one title to enable generation."
+    )
 
 can_generate = (
     uploaded_pdf is not None
@@ -364,17 +408,8 @@ can_generate = (
     and len(titles) == len(rename_strings)
 )
 
-if titles and rename_strings and len(titles) != len(rename_strings):
-    st.error(
-        "The number of titles and rename strings must match. "
-        "Please provide one rename string for every title."
-    )
-
-if not titles:
-    st.caption("Enter at least one title to enable generation.")
-
 # --------------------------------------------------
-# GENERATION
+# 5. GENERATE PDFS
 # --------------------------------------------------
 
 st.subheader("5. Generate PDFs")
@@ -387,17 +422,17 @@ if st.button(
 ):
     source_bytes = uploaded_pdf.getvalue()
 
-    # Reset results for a new batch.
     generated = []
     failures = []
     used_filenames = set()
 
     try:
-        # Validate the PDF.
+        # Validate the uploaded PDF.
         with fitz.open(
             stream=source_bytes,
             filetype="pdf",
         ) as check_doc:
+
             if check_doc.needs_pass:
                 st.error(
                     "This PDF is password-protected. "
@@ -413,7 +448,7 @@ if st.button(
         if not has_placeholder:
             st.error(
                 f'The placeholder "{PLACEHOLDER}" was not found. '
-                "Please check the uploaded PDF."
+                "Please check the PDF template."
             )
             st.stop()
 
@@ -433,6 +468,7 @@ if st.button(
                     source_bytes=source_bytes,
                     title=title,
                     title_size=title_size,
+                    alignment=alignment,
                     font_path=font_path,
                 )
 
@@ -479,11 +515,12 @@ if st.button(
         st.session_state["pdf_failures"] = failures
 
     except Exception as exc:
-        st.error(f"Unable to process the batch: {exc}")
-
+        st.error(
+            f"Unable to process the batch: {exc}"
+        )
 
 # --------------------------------------------------
-# RESULTS AND DOWNLOADS
+# 6. RESULTS AND DOWNLOADS
 # --------------------------------------------------
 
 generated = st.session_state.get(
@@ -517,7 +554,6 @@ if generated or failures:
             f"{len(generated)} PDF(s) generated successfully."
         )
 
-        # Create ZIP in memory.
         zip_buffer = io.BytesIO()
 
         with zipfile.ZipFile(
@@ -577,9 +613,8 @@ if generated or failures:
                 )
 
     st.caption(
-        "The 2 MiB limit is checked for each PDF individually. "
-        "Oversized files are excluded from the ZIP rather than "
-        "being presented as compliant."
+        "Each PDF is checked against the 2 MiB size limit. "
+        "Oversized PDFs are excluded from the ZIP."
     )
 
 st.divider()
