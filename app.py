@@ -1,202 +1,364 @@
-import os
 import io
+import re
 import zipfile
-import streamlit as st
-import fitz  # PyMuPDF
+from pathlib import Path
 
-# --- Page Configuration ---
+import fitz  # PyMuPDF
+import streamlit as st
+
+MAX_SIZE = 2 * 1024 * 1024  # 2.0 MiB
+PLACEHOLDER = "Replaced Title Here"
+FONT_DIR = Path(__file__).parent / "fonts"
+
 st.set_page_config(
-    page_title="Bulk PDF Template Transformer",
-    page_icon="⚡",
-    layout="centered"
+    page_title="Bulk PDF Generator",
+    page_icon="📄",
+    layout="wide",
 )
 
-def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, font_size, is_bold, alignment):
+st.title("📄 Bulk PDF Generator")
+st.caption(
+    "Upload a PDF, replace its title in bulk, "
+    "optimize the files, and download a ZIP."
+)
+
+
+def read_lines(text):
+    """Read one non-empty value per line."""
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def safe_filename(value):
+    """Remove characters that are unsafe in common filenames."""
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value)
+    value = value.strip().rstrip(".")
+    return value[:180] or "document"
+
+
+def unique_filename(name, used):
+    """Prevent duplicate filenames inside the ZIP."""
+    base = safe_filename(name)
+    candidate = base
+    counter = 2
+
+    while candidate.casefold() in used:
+        candidate = f"{base}_{counter}"
+        counter += 1
+
+    used.add(candidate.casefold())
+    return candidate + ".pdf"
+
+
+def find_font():
+    """Find an optional bundled bold font."""
+    candidates = [
+        FONT_DIR / "NotoSans-Bold.ttf",
+        FONT_DIR / "DejaVuSans-Bold.ttf",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return str(path)
+    return None
+
+
+def create_pdf(source_bytes, title, font_path=None):
     """
-    Processes the template PDF: searches for 'Change Here Now', covers it with a clean white mask,
-    and draws the new title directly using precise text insertion, bold style, and alignment.
+    Replace every searchable placeholder occurrence.
+    The replacement is bold when a suitable font is available.
     """
-    zip_buffer = io.BytesIO()
-    
-    # Map friendly font names to correct PyMuPDF Base-14 font codes for bold/regular
-    font_map = {
-        "Helvetica": "helv" if not is_bold else "hebo",
-        "Times-Roman": "tiro" if not is_bold else "tibo",
-        "Courier": "cour" if not is_bold else "cobo"
-    }
-    selected_font = font_map.get(font_choice, "hebo" if is_bold else "helv")
+    doc = fitz.open(stream=source_bytes, filetype="pdf")
 
-    # Map alignment to PyMuPDF text alignment flags (0 = Left, 1 = Center, 2 = Right)
-    align_map = {"Left": 0, "Center": 1, "Right": 2}
-    align_flag = align_map.get(alignment, 0)
+    try:
+        found = []
 
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
-        total_files = len(titles)
-        
-        for i in range(total_files):
-            current_title = titles[i].strip()
-            if not current_title:
-                continue
-                
-            # Determine custom filename string
-            if i < len(custom_filenames) and custom_filenames[i].strip():
-                raw_name = custom_filenames[i].strip()
-            else:
-                raw_name = current_title
-                
-            # Sanitize filename safely (Fixed .join typo here)
-            safe_name = "".join(c for c in raw_name if c.isalnum() or c in (' ', '_', '-')).strip()
-            safe_name = safe_name.replace(" ", "_") + ".pdf"
-            
-            # Open fresh copy of the uploaded template PDF for each item
-            doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
-            
-            found_placeholder = False
-            
-            # Scan every page to find "Change Here Now"
-            for page in doc:
-                text_instances = page.search_for("Change Here Now")
-                
-                # Fallback casing variants if needed
-                if not text_instances:
-                    text_instances = page.search_for("change here now")
-                if not text_instances:
-                    text_instances = page.search_for("CHANGE HERE NOW")
+        for page_number, page in enumerate(doc):
+            for rect in page.search_for(PLACEHOLDER):
+                found.append((page_number, rect))
 
-                for inst in text_instances:
-                    found_placeholder = True
-                    
-                    # 1. Draw a solid white box over "Change Here Now" to hide it completely
-                    mask_rect = fitz.Rect(inst.x0 - 2, inst.y0 - 2, inst.x1 + 10, inst.y1 + 4)
-                    page.draw_rect(mask_rect, color=(1, 1, 1), fill=(1, 1, 1))
-                    
-                    # 2. Define a generous text box layout area matching your alignment choice
-                    if align_flag == 0: # Left
-                        box_rect = fitz.Rect(inst.x0, inst.y0 - 2, inst.x0 + 450, inst.y0 + font_size + 20)
-                    elif align_flag == 1: # Center
-                        box_rect = fitz.Rect(inst.x0 - 200, inst.y0 - 2, inst.x0 + 300, inst.y0 + font_size + 20)
-                    else: # Right
-                        box_rect = fitz.Rect(inst.x0 - 400, inst.y0 - 2, inst.x0 + 50, inst.y0 + font_size + 20)
-                    
-                    # 3. Insert the new title cleanly over the mask
-                    page.insert_textbox(
-                        box_rect,
-                        current_title,
-                        fontsize=font_size,
-                        fontname=selected_font,
-                        color=(0, 0, 0),
-                        align=align_flag
-                    )
-            
-            # Fallback safety measure if text wasn't found
-            if not found_placeholder:
-                page = doc[0]
-                box_rect = fitz.Rect(50, 50, 450, 100)
-                page.insert_textbox(
-                    box_rect,
-                    current_title,
-                    fontsize=font_size,
-                    fontname=selected_font,
-                    color=(0, 0, 0),
-                    align=align_flag
+        if not found:
+            raise ValueError(
+                f'Could not find "{PLACEHOLDER}" in searchable PDF text. '
+                "The placeholder may be an image or outlined text."
+            )
+
+        # Redact all occurrences before inserting replacements.
+        for page_number, rect in found:
+            page = doc[page_number]
+            page.add_redact_annot(
+                rect,
+                fill=(1, 1, 1),
+                cross_out=False,
+            )
+
+        for page in doc:
+            page.apply_redactions(images=0, graphics=0)
+
+        # Insert the replacement in the original placeholder area.
+        for page_number, original_rect in found:
+            page = doc[page_number]
+
+            # Keep the same line area and avoid crossing the page edge.
+            rect = fitz.Rect(original_rect)
+            rect.x1 = min(page.rect.x1 - 24, max(
+                rect.x1, rect.x0 + 20
+            ))
+
+            font_size = max(5.0, min(24.0, rect.height * 0.78))
+            inserted = False
+
+            while font_size >= 5.0:
+                kwargs = {
+                    "fontsize": font_size,
+                    "align": fitz.TEXT_ALIGN_LEFT,
+                    "overlay": True,
+                }
+
+                if font_path:
+                    kwargs["fontfile"] = font_path
+                    kwargs["fontname"] = "CustomBold"
+
+                result = page.insert_textbox(
+                    rect,
+                    title,
+                    **kwargs,
                 )
 
-            # Match internal metadata title to the current title
-            doc.set_metadata({
-                "title": current_title,
-                "subject": current_title,
-                "producer": "Bulk PDF Generator Studio"
-            })
-            
-            # Save compressed output file under 2.0 MB
-            output_bytes = doc.tobytes(garbage=4, deflate=True)
-            doc.close()
-            
-            # Write generated file into the zip archive
-            zipf.writestr(safe_name, output_bytes)
-            
-    zip_buffer.seek(0)
-    return zip_buffer
+                # PyMuPDF returns a non-negative value on success.
+                if result >= 0:
+                    inserted = True
+                    break
 
-def main():
-    st.title("⚡ Bulk PDF Generator & Renamer")
-    st.markdown("Upload a template PDF containing **`Change Here Now`**, customize your options, and download your bulk package.")
+                font_size -= 0.5
 
-    # --- Section 1: Template Upload ---
-    with st.container():
-        st.subheader("1. Upload Template PDF")
-        uploaded_file = st.file_uploader("Upload your template file (.pdf)", type=["pdf"])
-        if uploaded_file:
-            st.success("Template PDF uploaded successfully!")
+            if not inserted:
+                raise ValueError(
+                    f'Title "{title}" does not fit in the '
+                    "placeholder area. Use a shorter title or "
+                    "adjust the template layout."
+                )
 
-    st.markdown("---")
+        # Set PDF document metadata.
+        metadata = doc.metadata
+        metadata["title"] = title
+        doc.set_metadata(metadata)
 
-    # --- Section 2: Typography & Formatting Settings ---
-    st.subheader("2. Typography & Formatting Settings")
-    t_col1, t_col2, t_col3, t_col4 = st.columns(4)
-    
-    with t_col1:
-        font_choice = st.selectbox("Font Style", ["Helvetica", "Times-Roman", "Courier"])
-    with t_col2:
-        font_size = st.slider("Font Size", min_value=8, max_value=48, value=16)
-    with t_col3:
-        is_bold = st.checkbox("Make Bold", value=True)
-    with t_col4:
-        alignment = st.selectbox("Text Alignment", ["Left", "Center", "Right"])
+        output = io.BytesIO()
+        doc.save(
+            output,
+            garbage=4,
+            deflate=True,
+            clean=True,
+        )
+        return output.getvalue()
 
-    st.markdown("---")
+    finally:
+        doc.close()
 
-    # --- Section 3: Data Input Boxes ---
-    col1, col2 = st.columns(2)
 
-    with col1:
-        st.subheader("3. Bulk Titles (Replaces 'Change Here Now')")
-        st.markdown("Enter titles below (**one per line**). Each line replaces *Change Here Now*.")
-        default_titles = "Project Alpha Report\nQuarterly Review 2026\nClient Compliance Update"
-        titles_input = st.text_area("Titles List", value=default_titles, height=180)
+# ---------------- Streamlit interface ----------------
 
-    with col2:
-        st.subheader("4. Bulk Rename Strings")
-        st.markdown("Enter custom file rename strings below (**one per line**).")
-        default_renames = "alpha_report_final\nquarterly_review\ncompliance_update_v1"
-        renames_input = st.text_area("Rename Strings List", value=default_renames, height=180)
+uploaded_pdf = st.file_uploader(
+    "1. Upload your PDF template",
+    type=["pdf"],
+)
 
-    st.markdown("---")
+st.info(
+    'Your PDF should contain searchable text reading '
+    '"Replaced Title Here".'
+)
 
-    # --- Execution Action ---
-    if st.button("🚀 Generate Bulk PDFs & Download ZIP", type="primary", use_container_width=True):
-        if not uploaded_file:
-            st.error("Please upload a template PDF file first.")
-        else:
-            titles_list = titles_input.split("\n")
-            renames_list = renames_input.split("\n")
-            
-            valid_titles = [t for t in titles_list if t.strip()]
-            
-            if not valid_titles:
-                st.warning("Please provide at least one valid title.")
-            else:
-                with st.spinner("Processing documents, masking placeholder, placing bold titles, and compressing..."):
-                    pdf_bytes = uploaded_file.read()
-                    zip_file_buffer = process_bulk_pdfs(
-                        pdf_bytes, 
-                        titles_list, 
-                        renames_list, 
-                        font_choice, 
-                        font_size, 
-                        is_bold, 
-                        alignment
+col1, col2 = st.columns(2)
+
+with col1:
+    titles_input = st.text_area(
+        "2. Bulk titles — one per line",
+        height=260,
+        placeholder=(
+            "Stream\n"
+            "𝐒𝐭𝐫𝐞𝐚𝐦\n"
+            "Ｓｔｒｅａｍｉｎｇ"
+        ),
+    )
+
+with col2:
+    names_input = st.text_area(
+        "3. Bulk rename strings — one per line",
+        height=260,
+        placeholder=(
+            "stream-document\n"
+            "bold-stream-document\n"
+            "streaming-document"
+        ),
+    )
+
+font_path = find_font()
+
+with st.expander("Font and formatting settings"):
+    st.write(
+        "A bundled font can improve bold formatting and "
+        "Unicode coverage. Add a suitable TTF font to "
+        "the fonts/ directory in your GitHub repository."
+    )
+    st.write(
+        "Unicode characters are retained in the title string, "
+        "but exact visual appearance depends on the font's glyph "
+        "coverage. A font cannot reproduce every Unicode style."
+    )
+
+titles = read_lines(titles_input)
+names = read_lines(names_input)
+
+st.write(f"**Titles:** {len(titles)}")
+st.write(f"**Rename strings:** {len(names)}")
+
+if titles and names and len(titles) != len(names):
+    st.warning(
+        "The number of titles and rename strings must match. "
+        "Each line is paired by its position."
+    )
+
+if titles and names and len(titles) == len(names):
+    st.caption(
+        f"{len(titles)} PDF files will be generated."
+    )
+
+if st.button(
+    "Generate PDFs",
+    type="primary",
+    use_container_width=True,
+    disabled=not (
+        uploaded_pdf
+        and titles
+        and names
+        and len(titles) == len(names)
+    ),
+):
+    try:
+        source_bytes = uploaded_pdf.getvalue()
+
+        # Validate the template before starting a batch.
+        with fitz.open(
+            stream=source_bytes,
+            filetype="pdf",
+        ) as check_doc:
+            if check_doc.needs_pass:
+                st.error(
+                    "The PDF is password-protected. "
+                    "Upload an unlocked PDF."
+                )
+                st.stop()
+
+        generated = []
+        failures = []
+        used_names = set()
+        progress = st.progress(0)
+        status = st.empty()
+
+        for index, (title, rename) in enumerate(
+            zip(titles, names), start=1
+        ):
+            status.write(
+                f"Processing {index}/{len(titles)}: {title}"
+            )
+
+            try:
+                pdf_bytes = create_pdf(
+                    source_bytes,
+                    title,
+                    font_path,
+                )
+
+                # Reject oversized files instead of pretending
+                # they satisfy the size limit.
+                if len(pdf_bytes) > MAX_SIZE:
+                    failures.append({
+                        "title": title,
+                        "filename": rename,
+                        "reason": (
+                            f"File is {len(pdf_bytes) / 1024 / 1024:.2f} "
+                            "MiB after optimization; limit is 2.0 MiB."
+                        ),
+                    })
+                else:
+                    filename = unique_filename(
+                        rename, used_names
                     )
-                    
-                st.success(f"Successfully generated {len(valid_titles)} customized PDF documents (optimized under 2.0 MB each)!")
-                
+                    generated.append(
+                        (filename, pdf_bytes, title)
+                    )
+
+            except Exception as exc:
+                failures.append({
+                    "title": title,
+                    "filename": rename,
+                    "reason": str(exc),
+                })
+
+            progress.progress(index / len(titles))
+
+        status.empty()
+        progress.empty()
+
+        st.session_state["generated_pdfs"] = generated
+        st.session_state["pdf_failures"] = failures
+
+    except Exception as exc:
+        st.error(f"Unable to process the PDF: {exc}")
+
+
+generated = st.session_state.get("generated_pdfs", [])
+failures = st.session_state.get("pdf_failures", [])
+
+if generated or failures:
+    st.divider()
+    st.subheader("Generation results")
+
+    good, bad = st.columns(2)
+    good.metric("Successful PDFs", len(generated))
+    bad.metric("Failed or oversized", len(failures))
+
+    if generated:
+        zip_buffer = io.BytesIO()
+
+        with zipfile.ZipFile(
+            zip_buffer,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            for filename, pdf_bytes, title in generated:
+                archive.writestr(filename, pdf_bytes)
+
+        st.download_button(
+            "⬇️ Download all PDFs (ZIP)",
+            data=zip_buffer.getvalue(),
+            file_name="bulk_generated_pdfs.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
+
+        with st.expander("View successful files"):
+            for filename, pdf_bytes, title in generated:
+                size_mb = len(pdf_bytes) / (1024 * 1024)
+                st.write(
+                    f"✅ **{filename}** — "
+                    f"{size_mb:.3f} MiB — {title}"
+                )
+
+        # Optional individual PDF downloads.
+        with st.expander("Download individual PDFs"):
+            for filename, pdf_bytes, title in generated:
                 st.download_button(
-                    label="📥 Download Generated PDFs (.zip)",
-                    data=zip_file_buffer,
-                    file_name="bulk_generated_documents.zip",
-                    mime="application/zip",
-                    use_container_width=True
+                    f"Download {filename}",
+                    data=pdf_bytes,
+                    file_name=filename,
+                    mime="application/pdf",
+                    key=f"download_{filename}",
                 )
 
-if __name__ == "__main__":
-    main()
+    if failures:
+        with st.expander("View failed files"):
+            for item in failures:
+                st.error(
+                    f"{item['filename']} — {item['title']}: "
+                    f"{item['reason']}"
+                )
