@@ -13,8 +13,8 @@ st.set_page_config(
 
 def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, font_size, is_bold, alignment):
     """
-    Core Engine: Explicitly searches for 'Change Here Now' in the uploaded PDF,
-    wipes it out, and replaces it with the bulk titles using custom font size, bold, and alignment.
+    Processes the template PDF: searches for 'Change Here Now', covers it with a clean white mask,
+    and draws the new title directly using precise text insertion, bold style, and alignment.
     """
     zip_buffer = io.BytesIO()
     
@@ -45,7 +45,7 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
                 raw_name = current_title
                 
             # Sanitize filename safely
-            safe_name = "".join(c for c in raw_name if c.isalnum() or c in (' ', '_', '-')).strip()
+            safe_name = "".json(c for c in raw_name if c.isalnum() or c in (' ', '_', '-')).strip()
             safe_name = safe_name.replace(" ", "_") + ".pdf"
             
             # Open fresh copy of the uploaded template PDF for each item
@@ -55,10 +55,9 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
             
             # Scan every page to find "Change Here Now"
             for page in doc:
-                # Search for the exact placeholder string
                 text_instances = page.search_for("Change Here Now")
                 
-                # Fallback search variants if case formatting differs slightly in the PDF
+                # Fallback casing variants if needed
                 if not text_instances:
                     text_instances = page.search_for("change here now")
                 if not text_instances:
@@ -67,20 +66,19 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
                 for inst in text_instances:
                     found_placeholder = True
                     
-                    # 1. Cleanly erase the "Change Here Now" placeholder from the PDF
-                    page.add_redact_annot(inst)
-                    page.apply_redactions()
+                    # 1. Draw a solid white box over "Change Here Now" to hide it completely
+                    mask_rect = fitz.Rect(inst.x0 - 2, inst.y0 - 2, inst.x1 + 10, inst.y1 + 4)
+                    page.draw_rect(mask_rect, color=(1, 1, 1), fill=(1, 1, 1))
                     
-                    # 2. Setup a clear layout box for the replacement title based on alignment
-                    # Width is set wide (400px) so center and right alignments have room to render properly
+                    # 2. Define a generous text box layout area matching your alignment choice
                     if align_flag == 0: # Left
-                        box_rect = fitz.Rect(inst.x0, inst.y0 - 4, inst.x0 + 400, inst.y0 + font_size + 15)
+                        box_rect = fitz.Rect(inst.x0, inst.y0 - 2, inst.x0 + 450, inst.y0 + font_size + 20)
                     elif align_flag == 1: # Center
-                        box_rect = fitz.Rect(inst.x0 - 150, inst.y0 - 4, inst.x0 + 250, inst.y0 + font_size + 15)
+                        box_rect = fitz.Rect(inst.x0 - 200, inst.y0 - 2, inst.x0 + 300, inst.y0 + font_size + 20)
                     else: # Right
-                        box_rect = fitz.Rect(inst.x0 - 350, inst.y0 - 4, inst.x0 + 50, inst.y0 + font_size + 15)
+                        box_rect = fitz.Rect(inst.x0 - 400, inst.y0 - 2, inst.x0 + 50, inst.y0 + font_size + 20)
                     
-                    # 3. Insert the new bulk title with your chosen size, bold weight, and alignment
+                    # 3. Insert the new title cleanly over the mask
                     page.insert_textbox(
                         box_rect,
                         current_title,
@@ -90,9 +88,8 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
                         align=align_flag
                     )
             
-            # If the placeholder text wasn't found anywhere in the PDF, log/handle gracefully
+            # Fallback safety measure if text wasn't found
             if not found_placeholder:
-                # Fallback: if "Change Here Now" isn't found, insert at top-center of page 1 as a safety measure
                 page = doc[0]
                 box_rect = fitz.Rect(50, 50, 450, 100)
                 page.insert_textbox(
@@ -104,7 +101,7 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
                     align=align_flag
                 )
 
-            # Match PDF internal metadata title to the current title
+            # Match internal metadata title to the current title
             doc.set_metadata({
                 "title": current_title,
                 "subject": current_title,
@@ -122,8 +119,8 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
     return zip_buffer
 
 def main():
-    st.title("⚡ Bulk PDF Template Transformer")
-    st.markdown("Upload a template PDF containing **`Change Here Now`**, enter your bulk titles to replace it, and download your zip package.")
+    st.title("⚡ Bulk PDF Generator & Renamer")
+    st.markdown("Upload a template PDF containing **`Change Here Now`**, customize your options, and download your bulk package.")
 
     # --- Section 1: Template Upload ---
     with st.container():
@@ -154,7 +151,7 @@ def main():
 
     with col1:
         st.subheader("3. Bulk Titles (Replaces 'Change Here Now')")
-        st.markdown("Enter titles below (**one per line**). Each line will replace *Change Here Now* on a separate PDF.")
+        st.markdown("Enter titles below (**one per line**). Each line replaces *Change Here Now*.")
         default_titles = "Project Alpha Report\nQuarterly Review 2026\nClient Compliance Update"
         titles_input = st.text_area("Titles List", value=default_titles, height=180)
 
@@ -179,7 +176,7 @@ def main():
             if not valid_titles:
                 st.warning("Please provide at least one valid title.")
             else:
-                with st.spinner("Replacing 'Change Here Now' across documents, applying bold styling, and compressing..."):
+                with st.spinner("Processing documents, masking placeholder, placing bold titles, and compressing..."):
                     pdf_bytes = uploaded_file.read()
                     zip_file_buffer = process_bulk_pdfs(
                         pdf_bytes, 
