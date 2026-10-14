@@ -14,7 +14,7 @@ st.set_page_config(
 def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, font_size, is_bold, alignment):
     """
     Processes the template PDF: searches for 'Change Here Now', blanks it out,
-    and inserts the bulk title cleanly with guaranteed bold formatting and layout.
+    and inserts the bulk title with precise alignment, bold styling, and metadata sync.
     """
     zip_buffer = io.BytesIO()
     
@@ -25,6 +25,10 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
         "Courier": "cour" if not is_bold else "cobo"
     }
     selected_font = font_map.get(font_choice, "hebo" if is_bold else "helv")
+
+    # Map alignment to PyMuPDF text alignment flags (0 = Left, 1 = Center, 2 = Right)
+    align_map = {"Left": 0, "Center": 1, "Right": 2}
+    align_flag = align_map.get(alignment, 0)
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
         total_files = len(titles)
@@ -51,7 +55,7 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
             for page in doc:
                 text_instances = page.search_for("Change Here Now")
                 
-                # Fallback if case differs
+                # Fallback if casing differs
                 if not text_instances:
                     text_instances = page.search_for("change here now")
                 if not text_instances:
@@ -62,14 +66,18 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
                     page.add_redact_annot(inst)
                     page.apply_redactions()
                     
-                    # 2. Insert text directly at the exact origin coordinates of the placeholder
-                    # (inst.x0, inst.y1 aligns nicely with the baseline of text fields)
-                    page.insert_text(
-                        fitz.Point(inst.x0, inst.y1),
+                    # 2. Define a text box container width (350 points) starting from the placeholder coordinate
+                    # This gives enough horizontal room for Center and Right alignments to render correctly
+                    box_rect = fitz.Rect(inst.x0, inst.y0 - 3, inst.x0 + 350, inst.y0 + font_size + 20)
+                    
+                    # 3. Insert styled, aligned, auto-wrapping text box
+                    page.insert_textbox(
+                        box_rect,
                         current_title,
                         fontsize=font_size,
                         fontname=selected_font,
-                        color=(0, 0, 0)
+                        color=(0, 0, 0),
+                        align=align_flag
                     )
             
             # Match Page Title / Metadata to the current title
@@ -91,7 +99,7 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
 
 def main():
     st.title("⚡ Bulk PDF Generator & Renamer")
-    st.markdown("Upload a template PDF containing **`Change Here Now`**, customize typography, and download your bulk package instantly.")
+    st.markdown("Upload a template PDF containing **`Change Here Now`**, customize typography and alignment, and download your bulk package instantly.")
 
     # --- Section 1: Template Upload ---
     with st.container():
@@ -102,17 +110,18 @@ def main():
 
     st.markdown("---")
 
-    # --- Section 2: Typography & Styling Controls ---
+    # --- Section 2: Typography & Alignment Controls ---
     st.subheader("2. Typography & Formatting Settings")
-    t_col1, t_col2, t_col3 = st.columns(3)
+    t_col1, t_col2, t_col3, t_col4 = st.columns(4)
     
     with t_col1:
         font_choice = st.selectbox("Font Style", ["Helvetica", "Times-Roman", "Courier"])
     with t_col2:
         font_size = st.slider("Font Size", min_value=8, max_value=32, value=14)
     with t_col3:
-        # Checked by default to guarantee bold styling
         is_bold = st.checkbox("Make Bold", value=True)
+    with t_col4:
+        alignment = st.selectbox("Text Alignment", ["Left", "Center", "Right"])
 
     st.markdown("---")
 
@@ -146,9 +155,8 @@ def main():
             if not valid_titles:
                 st.warning("Please provide at least one valid title.")
             else:
-                with st.spinner("Processing documents, replacing text with bold styling, and compressing files..."):
+                with st.spinner("Processing documents, applying bold typography and alignment, and compressing files..."):
                     pdf_bytes = uploaded_file.read()
-                    # Default alignment left to point-origin
                     zip_file_buffer = process_bulk_pdfs(
                         pdf_bytes, 
                         titles_list, 
@@ -156,7 +164,7 @@ def main():
                         font_choice, 
                         font_size, 
                         is_bold, 
-                        alignment="Left"
+                        alignment
                     )
                     
                 st.success(f"Successfully generated {len(valid_titles)} customized PDF documents (optimized under 2.0 MB each)!")
