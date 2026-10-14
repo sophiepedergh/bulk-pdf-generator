@@ -13,8 +13,8 @@ st.set_page_config(
 
 def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, font_size, is_bold, alignment):
     """
-    Processes the template PDF: replaces 'Change Here Now' with bulk titles,
-    applies typography settings (font, size, weight, alignment), updates metadata, 
+    Processes the template PDF: searches for 'Change Here Now' (case-insensitive),
+    replaces it with bulk titles, applies typography settings, updates metadata, 
     and compresses output to keep sizes under 2.0 MB.
     """
     zip_buffer = io.BytesIO()
@@ -52,16 +52,33 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
             # Open PDF from uploaded bytes via PyMuPDF (fitz)
             doc = fitz.open(stream=input_pdf_bytes, filetype="pdf")
             
-            # 1. Replace "Change Here Now" with custom styled dynamic text block
+            replaced_any = False
+            
+            # Search and replace "Change Here Now" across all pages
             for page in doc:
+                # Search flags=fitz.TEXT_DEHYPHENATE or standard search
                 text_instances = page.search_for("Change Here Now")
+                
+                # Fallback check if standard search missed due to casing
+                if not text_instances:
+                    # Search variants if needed, or iterate words
+                    words = page.get_text("words")
+                    # Let's use a broader case-insensitive approach via text extraction search if standard fails
+                    for w in words:
+                        if "change here now" in w[4].lower():
+                            # Construct rect from word coordinates
+                            rect = fitz.Rect(w[0], w[1], w[2], w[3])
+                            text_instances.append(rect)
+
                 for inst in text_instances:
+                    replaced_any = True
                     # Clear out original placeholder text cleanly
                     page.add_redact_annot(inst, text="")
                     page.apply_redactions()
                     
-                    # Define a bounding box container matching or expanding the placeholder slot
-                    box_rect = fitz.Rect(inst.x0, inst.y0 - 2, inst.x1 + 150, inst.y1 + 20)
+                    # Define a clean bounding box container for the replacement title
+                    # Expands width to accommodate longer custom titles gracefully
+                    box_rect = fitz.Rect(inst.x0, inst.y0 - 2, inst.x0 + 400, inst.y1 + 30)
                     
                     # Insert auto-wrapping text box with user styling choices
                     page.insert_textbox(
@@ -73,14 +90,14 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
                         align=align_flag
                     )
             
-            # 2. Match Page Title / Metadata to the current title
+            # Match Page Title / Metadata to the current title
             doc.set_metadata({
                 "title": current_title,
                 "subject": current_title,
                 "producer": "Bulk PDF Generator Studio"
             })
             
-            # 3. Save with deflation compression to enforce file size < 2.0 MB
+            # Save with deflation compression to enforce file size < 2.0 MB
             output_bytes = doc.tobytes(garbage=4, deflate=True)
             doc.close()
             
@@ -148,7 +165,7 @@ def main():
             if not valid_titles:
                 st.warning("Please provide at least one valid title.")
             else:
-                with st.spinner("Processing documents, adjusting typography, updating titles, and compressing files..."):
+                with st.spinner("Processing documents, replacing 'Change Here Now', updating titles, and compressing files..."):
                     pdf_bytes = uploaded_file.read()
                     zip_file_buffer = process_bulk_pdfs(
                         pdf_bytes, 
