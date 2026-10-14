@@ -19,11 +19,11 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
     """
     zip_buffer = io.BytesIO()
     
-    # Map friendly font names to PyMuPDF font identifiers
+    # Map friendly font names to correct PyMuPDF Base-14 font codes
     font_map = {
-        "Helvetica": "helv" if not is_bold else "helv-bold",
-        "Times-Roman": "times-roman" if not is_bold else "times-bold",
-        "Courier": "courier" if not is_bold else "courier-bold"
+        "Helvetica": "helv" if not is_bold else "hebo",
+        "Times-Roman": "tiro" if not is_bold else "tibo",
+        "Courier": "cour" if not is_bold else "cobo"
     }
     selected_font = font_map.get(font_choice, "helv")
 
@@ -61,7 +61,6 @@ def process_bulk_pdfs(input_pdf_bytes, titles, custom_filenames, font_choice, fo
                     page.apply_redactions()
                     
                     # Define a bounding box container matching or expanding the placeholder slot
-                    # inst gives coordinates: (x0, y0, x1, y1)
                     box_rect = fitz.Rect(inst.x0, inst.y0 - 2, inst.x1 + 150, inst.y1 + 20)
                     
                     # Insert auto-wrapping text box with user styling choices
